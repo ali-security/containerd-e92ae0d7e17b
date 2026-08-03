@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/containerd/continuity/fs/fstest"
+	"github.com/moby/sys/user"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -94,15 +95,23 @@ guest:x:100:guest
 		},
 		{
 			user: "405:2147483648",
-			err:  "no groups found",
+			err:  "invalid USER value \"405:2147483648\": gid out of range",
 		},
 		{
 			user: "-1000",
-			err:  "no users found",
+			err:  "invalid USER value \"-1000\": uid out of range",
 		},
 		{
 			user: "2147483648",
-			err:  "no users found",
+			err:  "invalid USER value \"2147483648\": uid out of range",
+		},
+		{
+			user: "999999999999999999999999999999999999",
+			err:  "invalid USER value \"999999999999999999999999999999999999\": uid out of range",
+		},
+		{
+			user: "0:999999999999999999999999999999999999",
+			err:  "invalid USER value \"0:999999999999999999999999999999999999\": gid out of range",
 		},
 	}
 	for _, testCase := range testCases {
@@ -121,6 +130,100 @@ guest:x:100:guest
 			}
 			assert.Equal(t, testCase.expectedUID, s.Process.User.UID)
 			assert.Equal(t, testCase.expectedGID, s.Process.User.GID)
+		})
+	}
+}
+
+// TestWithUserOutOfRangeIDNotTreatedAsName ensures that a numeric USER value
+// which does not fit in the supported ID range is rejected outright instead of
+// being resolved as a user or group name against the image's /etc/passwd and
+// /etc/group. A malicious image can otherwise map such a value to root and have
+// the container run as UID 0, escaping a runAsNonRoot restriction.
+//
+//nolint:gosec
+func TestWithUserOutOfRangeIDNotTreatedAsName(t *testing.T) {
+	t.Parallel()
+
+	// A hostile rootfs that maps out-of-range numeric strings to root. The first
+	// entry does not fit in an int64 at all (strconv.Atoi reports
+	// strconv.ErrRange), the second exceeds the supported maximum of MaxInt32
+	// (and reports strconv.ErrRange on 32-bit platforms), the third is negative.
+	maliciousPasswd := `999999999999999999999999999999999999:x:0:0:root:/root:/bin/ash
+2147483648:x:0:0:root:/root:/bin/ash
+-1000:x:0:0:root:/root:/bin/ash
+nonroot:x:1000:1000:nonroot:/home/nonroot:/sbin/nologin
+`
+	maliciousGroup := `999999999999999999999999999999999999:x:0:root
+2147483648:x:0:root
+-1000:x:0:root
+nonroot:x:1000:nonroot
+`
+	td := t.TempDir()
+	apply := fstest.Apply(
+		fstest.CreateDir("/etc", 0777),
+		fstest.CreateFile("/etc/passwd", []byte(maliciousPasswd), 0777),
+		fstest.CreateFile("/etc/group", []byte(maliciousGroup), 0777),
+	)
+	if err := apply.Apply(td); err != nil {
+		t.Fatalf("failed to apply: %v", err)
+	}
+
+	// The exploit precondition: the rootfs really does resolve each of these
+	// numeric strings to root when they are looked up as a name. The errors
+	// asserted below are therefore the only thing keeping the container off
+	// UID/GID 0.
+	for _, name := range []string{"999999999999999999999999999999999999", "2147483648", "-1000"} {
+		usr, err := UserFromPath(td, func(u user.User) bool {
+			return u.Name == name
+		})
+		require.NoError(t, err)
+		require.Equal(t, 0, usr.Uid, "fixture must map %q to root in /etc/passwd", name)
+		gid, err := GIDFromPath(td, func(g user.Group) bool {
+			return g.Name == name
+		})
+		require.NoError(t, err)
+		require.Equal(t, uint32(0), gid, "fixture must map %q to root in /etc/group", name)
+	}
+
+	c := containers.Container{ID: t.Name()}
+	testCases := []struct {
+		user string
+		// which of the two IDs is out of range: "uid" or "gid"
+		field string
+	}{
+		// uid only
+		{user: "999999999999999999999999999999999999", field: "uid"},
+		{user: "2147483648", field: "uid"},
+		{user: "-1000", field: "uid"},
+		// uid:gid with an out-of-range uid
+		{user: "999999999999999999999999999999999999:1000", field: "uid"},
+		{user: "2147483648:1000", field: "uid"},
+		{user: "-1000:1000", field: "uid"},
+		// uid:gid with an out-of-range gid
+		{user: "1000:999999999999999999999999999999999999", field: "gid"},
+		{user: "1000:2147483648", field: "gid"},
+		{user: "1000:-1000", field: "gid"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.user, func(t *testing.T) {
+			t.Parallel()
+			// Start from a non-root user so that a successful name lookup
+			// against the hostile rootfs is observable.
+			s := Spec{
+				Version: specs.Version,
+				Root: &specs.Root{
+					Path: td,
+				},
+				Linux: &specs.Linux{},
+				Process: &specs.Process{
+					User: specs.User{UID: 1000, GID: 1000},
+				},
+			}
+			err := WithUser(testCase.user)(context.Background(), nil, &c, &s)
+			expected := fmt.Sprintf("invalid USER value %q: %s out of range", testCase.user, testCase.field)
+			require.EqualError(t, err, expected)
+			assert.Equal(t, uint32(1000), s.Process.User.UID, "out of range uid must not be resolved through /etc/passwd")
+			assert.Equal(t, uint32(1000), s.Process.User.GID, "out of range gid must not be resolved through /etc/group")
 		})
 	}
 }
