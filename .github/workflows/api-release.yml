@@ -1,12 +1,9 @@
 on:
-  push:
-    tags:
-      - "api/v*" # Push events to matching api/v*, i.e. api/v1.0, api/v20.15.10
-
+  workflow_dispatch:
 name: API Release
 
 env:
-  GO_VERSION: "1.24.11"
+  GO_VERSION: 1.24.11
 
 permissions: # added using https://github.com/step-security/secure-workflows
   contents: read

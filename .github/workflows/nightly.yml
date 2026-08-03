@@ -1,11 +1,6 @@
 name: Nightly
 on:
-  schedule:
-    - cron: "0 0 * * *" # Every day at midnight
-  pull_request:
-    paths:
-      - ".github/workflows/nightly.yml"
-
+  workflow_dispatch:
 permissions: # added using https://github.com/step-security/secure-workflows
   contents: read
 

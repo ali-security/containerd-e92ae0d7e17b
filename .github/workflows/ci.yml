@@ -2,9 +2,7 @@ name: CI
 on:
   # When added to a merge queue.
   # See https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue#triggering-merge-group-checks-with-github-actions
-  merge_group:
-  pull_request:
-    branches: ['main', 'release/**']
+  workflow_dispatch:
 
 permissions: # added using https://github.com/step-security/secure-workflows
   contents: read
@@ -130,17 +128,17 @@ jobs:
         include:
           - goos: linux
             goarch: arm
-            goarm: "7"
+            goarm: '7'
           - goos: linux
             goarch: arm
-            goarm: "5"
+            goarm: '5'
           - goos: freebsd
             goarch: amd64
           - goos: freebsd
             goarch: arm64
           - goos: windows
             goarch: arm
-            goarm: "7"
+            goarm: '7'
 
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -195,7 +193,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
-        go-version: ["1.24.11", "1.25.5"]
+        go-version: [1.24.11, 1.25.5]
         exclude:
           - os: ${{ github.event.repository.private && 'ubuntu-24.04-arm' || '' }}
     steps:
@@ -269,9 +267,9 @@ jobs:
       - env:
           TEST_IMAGE_LIST: ${{github.workspace}}/repolist.toml
           CRI_TEST_IMAGES: ${{github.workspace}}/cri-test-images.yaml
-          BUSYBOX_TESTING_IMAGE_REF: "registry.k8s.io/e2e-test-images/busybox:1.29-2"
-          RESOURCE_CONSUMER_TESTING_IMAGE_REF: "registry.k8s.io/e2e-test-images/resource-consumer:1.10"
-          WEBSERVER_TESTING_IMAGE_REF: "registry.k8s.io/e2e-test-images/nginx:1.14-2"
+          BUSYBOX_TESTING_IMAGE_REF: registry.k8s.io/e2e-test-images/busybox:1.29-2
+          RESOURCE_CONSUMER_TESTING_IMAGE_REF: registry.k8s.io/e2e-test-images/resource-consumer:1.10
+          WEBSERVER_TESTING_IMAGE_REF: registry.k8s.io/e2e-test-images/nginx:1.14-2
         run: |
           cat > "${{ env.TEST_IMAGE_LIST }}" << EOF
           busybox = "${{ env.BUSYBOX_TESTING_IMAGE_REF }}"
@@ -311,7 +309,7 @@ jobs:
           CGO_ENABLED: 1
           GOTESTSUM_JUNITFILE: ${{github.workspace}}/test-integration-serial-junit.xml
           GOTESTSUM_JSONFILE: ${{github.workspace}}/test-integration-serial-gotest.json
-          EXTRA_TESTFLAGS: "-timeout=20m"
+          EXTRA_TESTFLAGS: -timeout=20m
         run: mingw32-make.exe integration
       - run: if [ -f *-gotest.json ]; then echo '# Integration 1' >> $GITHUB_STEP_SUMMARY; teststat -markdown *-gotest.json >> $GITHUB_STEP_SUMMARY; fi
         if: always()
@@ -324,7 +322,7 @@ jobs:
       - name: Integration 2
         env:
           TESTFLAGS_PARALLEL: 1
-          EXTRA_TESTFLAGS: "-short"
+          EXTRA_TESTFLAGS: -short
           CGO_ENABLED: 1
           GOTESTSUM_JUNITFILE: ${{github.workspace}}/test-integration-parallel-junit.xml
           GOTESTSUM_JSONFILE: ${{github.workspace}}/test-integration-parallel-gotest.json
@@ -667,7 +665,7 @@ jobs:
         run: sudo BOX=$BOX vagrant ssh -c "sudo dmesg -T -f kern"
 
   tests-cri-in-userns:
-    name: "CRI-in-UserNS"
+    name: CRI-in-UserNS
 
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -734,8 +732,8 @@ jobs:
       - run: script/setup/install-teststat
       - name: Tests
         env:
-          GOTESTSUM_JUNITFILE: "${{ github.workspace }}/macos-test-junit.xml"
-          GOTESTSUM_JSONFILE: "${{ github.workspace }}/macos-test-gotest.json"
+          GOTESTSUM_JUNITFILE: ${{ github.workspace }}/macos-test-junit.xml
+          GOTESTSUM_JSONFILE: ${{ github.workspace }}/macos-test-gotest.json
         run: make test
       - run: if [ -f *-gotest.json ]; then echo '# Unit Tests' >> $GITHUB_STEP_SUMMARY; teststat -markdown *-gotest.json >> $GITHUB_STEP_SUMMARY; fi
         if: always()

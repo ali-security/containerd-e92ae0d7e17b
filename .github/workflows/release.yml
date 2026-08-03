@@ -1,15 +1,5 @@
 on:
-  push:
-    branches:
-      - main
-      - "release/**"
-    tags:
-      - "v*" # Push events to matching v*, i.e. v1.0, v20.15.10
-  pull_request:
-    branches:
-      - main
-      - "release/**"
-
+  workflow_dispatch:
 name: Release
 
 permissions: # added using https://github.com/step-security/secure-workflows

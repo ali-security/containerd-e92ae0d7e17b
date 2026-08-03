@@ -1,38 +1,20 @@
-name: "Build volume test images"
+name: Build volume test images
 on:
   workflow_dispatch:
-    inputs:
-      push_to_project:
-        description: "Project to build images for"
-        required: true
-        default: "ghcr.io/containerd"
-      azure_windows_image_id:
-        description: Windows image URN to deploy
-        required: true
-        default: MicrosoftWindowsServer:WindowsServer:2022-datacenter:latest
-      azure_vm_size:
-        description: Windows image builder VM size
-        required: true
-        default: Standard_D2s_v3
-      azure_location:
-        description: The Azure region to deploy to
-        required: true
-        default: westeurope
-
 permissions:
   contents: read
 
 env:
   AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUB_ID }}
   DEFAULT_ADMIN_USERNAME: azureuser
-  SSH_OPTS: "-o ServerAliveInterval=20 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+  SSH_OPTS: -o ServerAliveInterval=20 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
   AZURE_RESOURCE_GROUP: ctrd-test-image-build-${{ github.run_id }}
 
 jobs:
   images:
     permissions:
       packages: write
-    name: "Build volume test images"
+    name: Build volume test images
     runs-on: ubuntu-latest
     timeout-minutes: 60
 

@@ -1,20 +1,12 @@
-name: "Mirror Test Image"
+name: Mirror Test Image
 on:
   workflow_dispatch:
-    inputs:
-      upstream:
-        description: "Upstream image to mirror"
-        required: true
-        default: "docker.io/library/busybox:1.32"
-      image:
-        description: "Target image name (override)"
-
 permissions: # added using https://github.com/step-security/secure-workflows
   contents: read
 
 jobs:
   mirror:
-    name: "Mirror Image"
+    name: Mirror Image
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
