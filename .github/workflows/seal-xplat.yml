@@ -1,0 +1,153 @@
+name: Seal XPlat
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  module-zip:
+    name: Build module zip
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: false
+
+      # The published module zip for github.com/containerd/containerd/v2@v2.2.1
+      # CONTAINS .github/** (24 entries). The fork checkout's workflow files have
+      # been rewritten (workflow_dispatch-only) and additionally carry this new
+      # seal-xplat.yml, so zipping the checkout as-is would produce a wrong file
+      # set. Replace .github with upstream's own tree before zipping.
+      - name: Restore pristine .github from upstream tag
+        run: |
+          curl -sSL -o /tmp/upstream.tar.gz https://github.com/containerd/containerd/archive/refs/tags/v2.2.1.tar.gz
+          tar -xzf /tmp/upstream.tar.gz -C /tmp
+          rm -rf .github
+          cp -r /tmp/containerd-2.2.1/.github .github
+          git status --short | head -20
+
+      - name: Verify .github is pristine
+        run: |
+          if [ -e .github/workflows/seal-xplat.yml ]; then
+            echo "ERROR: .github/workflows/seal-xplat.yml still present; it would leak into the module zip"
+            exit 1
+          fi
+          if [ ! -f .github/workflows/ci.yml ]; then
+            echo "ERROR: upstream .github/workflows/ci.yml missing after restore"
+            exit 1
+          fi
+          echo ".github restored: seal-xplat.yml absent, ci.yml present"
+          echo ".github file count: $(find .github -type f | wc -l)"
+
+      # golang.org/x/mod/zip.CreateFromDir is Go's own module-zip implementation:
+      # it applies the exact proxy.golang.org inclusion rules, so it excludes
+      # vendor/, .git/ and the nested api/ module by construction.
+      # The helper module lives in /tmp/helper — OUTSIDE the repo — so neither the
+      # helper source nor its go.mod/go.sum can end up inside the zip.
+      - name: Build module zip
+        run: |
+          mkdir -p /tmp/helper
+          cat > /tmp/helper/create_mod.go <<'EOF'
+          package main
+
+          import (
+                  "log"
+                  "os"
+
+                  "golang.org/x/mod/module"
+                  "golang.org/x/mod/zip"
+          )
+
+          func main() {
+                  if len(os.Args) != 5 {
+                      log.Fatal("usage: create_mod <module-path> <version> <source-dir> <output-zip>")
+                  }
+                  m := module.Version{Path: os.Args[1], Version: os.Args[2]}
+                  f, err := os.Create(os.Args[4])
+                  if err != nil {
+                      log.Fatal(err)
+                  }
+                  defer f.Close()
+                  if err := zip.CreateFromDir(f, m, os.Args[3]); err != nil {
+                      log.Fatal(err)
+                  }
+                  log.Printf("created module zip: %s", os.Args[4])
+          }
+          EOF
+          SRC="$GITHUB_WORKSPACE"
+          # The output MUST live outside SRC: writing it into the source dir makes
+          # CreateFromDir walk the half-written zip into itself and abort with
+          # 'file "v2.2.1.zip" is larger than declared size'.
+          OUT="/tmp/v2.2.1.zip"
+          cd /tmp/helper
+          go mod init helper
+          # Pass ONLY the module path with the version pin. Adding
+          # golang.org/x/mod/module / golang.org/x/mod/zip as extra args makes them
+          # resolve to @upgrade (v0.38+, which requires Go 1.25) and breaks the pin.
+          go get golang.org/x/mod@v0.24.0
+          cat go.mod
+          go run create_mod.go github.com/containerd/containerd/v2 v2.2.1 "$SRC" "$OUT"
+          ls -l "$OUT"
+          echo "zip size (bytes): $(stat -c%s "$OUT")"
+          echo "zip entry count: $(unzip -l "$OUT" | tail -1)"
+          unzip -l "$OUT" | head -30
+          echo "--- .github entries in zip: $(unzip -l "$OUT" | grep -c '/\.github/')"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: module-zip
+          path: /tmp/v2.2.1.zip
+          if-no-files-found: error
+
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: false
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libbtrfs-dev libseccomp-dev pkg-config
+
+      - name: Run unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Daemon / root / kernel-dependent packages that cannot run on a hosted
+          # runner. /cmd/ and /contrib/ are anchored with slashes so they only ever
+          # match those top-level trees.
+          EXCLUDE='/integration|/cmd/|/contrib/|plugins/snapshots/btrfs|plugins/snapshots/devmapper|plugins/snapshots/blockfile|core/snapshots/testsuite|plugins/snapshots/overlay/overlayutils'
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # plugins/snapshots/windows: the windows/CIMFS snapshotter testsuite
+            # needs a privileged host with real CimFS support and fails on hosted
+            # GitHub Windows runners upstream, unrelated to anything we change.
+            EXCLUDE="$EXCLUDE|plugins/snapshots/windows"
+          fi
+          echo "exclusion regex: $EXCLUDE"
+          PKGS=$(go list ./... | grep -Ev "$EXCLUDE")
+          echo "package count: $(echo "$PKGS" | wc -l)"
+          # Mandatory-coverage sanity check: these must always be in the list.
+          for want in /client /internal/cri/labels /internal/cri/util /internal/cri/server /pkg/oci /pkg/labels; do
+            echo "$PKGS" | grep -qx "github.com/containerd/containerd/v2${want}" || {
+              echo "ERROR: mandatory package github.com/containerd/containerd/v2${want} was filtered out"
+              exit 1
+            }
+          done
+          echo "mandatory-coverage packages present"
+          go test -short -timeout 20m $PKGS
